@@ -1,0 +1,14 @@
+[ ] 1. Understand exact map format from your maps/README.md
+[ ] 2. Run your current program on the easy maps
+[ ] 3. Fix parser problems found by real maps
+[ ] 4. Fix pathfinding
+[ ] 5. Fix simultaneous movement / capacities
+[ ] 6. Implement restricted-zone transit correctly
+[ ] 7. Fix simulation output format
+[ ] 8. Fix visualization
+[ ] 9. Fix Makefile
+[ ] 10. Run flake8 + mypy
+[ ] 11. Test medium
+[ ] 12. Test hard
+[ ] 13. Test challenger
+[ ] 14. README final check
