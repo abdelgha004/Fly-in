@@ -39,12 +39,12 @@ def main() -> None:
         simulation = Simulation(network, drones, scheduler)
         visualizer = Visualizer(network)
 
-        results = simulation.run()
+        results, states = simulation.run()
+
+        visualizer.emit_required_output(results)
 
         if visual:
-            visualizer.emit_visual_output(results, drones)
-        else:
-            visualizer.emit_required_output(results)
+            visualizer.run_pygame(states)
 
     except (OSError, ValueError) as error:
         print(f"Error: {error}")

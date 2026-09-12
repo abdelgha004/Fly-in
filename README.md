@@ -14,7 +14,7 @@ This project is designed to solve a classic graph-routing problem with a strong 
 - constrained graph traversal,
 - path planning under capacity limits,
 - turn-based simulation with simultaneous moves,
-- terminal visualization for debugging and presentation.
+- graphical visualization for debugging and presentation.
 
 ## Project structure
 
@@ -25,7 +25,7 @@ This project is designed to solve a classic graph-routing problem with a strong 
 - `src/pathfinding.py` — path generation and search logic
 - `src/scheduler.py` — assignment of routes to drones
 - `src/simulation.py` — turn-based simulation engine
-- `src/visualization.py` — terminal visual output
+- `src/visualization.py` — real-time pygame map view
 - `maps/` — sample challenge maps
 
 ## Instructions
@@ -61,7 +61,7 @@ uv run python -m src maps/easy/01_linear_path.txt
 
 ### Visual mode
 
-To display a colored, turn-by-turn terminal visualization:
+To open an interactive pygame window showing the map and drones turn by turn:
 
 ```bash
 make visual FILE=maps/easy/02_simple_fork.txt
@@ -72,6 +72,8 @@ Or:
 ```bash
 uv run python -m src maps/easy/02_simple_fork.txt --visual
 ```
+
+Press `SPACE` to advance one turn, `ESC` to quit.
 
 ### Debugging and quality checks
 
@@ -172,25 +174,25 @@ to model their higher cost.
 
 ## Visual representation features
 
-The program includes a terminal visualizer that can be activated with `--visual`.
+The program includes a graphical visualizer, built with `pygame`, that can be activated with `--visual`.
 
 ### What the visualizer does
 
-- prints one block per simulation turn,
-- shows movement as a list of drone actions,
-- colors each destination zone according to metadata from the map,
-- highlights restricted-zone transitions clearly,
-- prints the final position of every drone at the end of the run.
+- lays out every zone on screen using the coordinates declared in the map file, and connects them with lines matching the map's topology,
+- colors each zone according to its metadata, and labels it with its name plus a tag showing `START`, `END`, or its maximum drone capacity,
+- draws each drone as a small circle labeled with its ID: a filled circle marks a drone that has landed at a zone, while a hollow ring marks a drone currently in transit along a connection (drawn at the connection's midpoint),
+- shows a header bar with the current turn out of the total, and a live count of drones delivered to the end hub versus the total fleet size,
+- advances one turn at a time on `SPACE`, so each step can be inspected before moving on.
 
 ### Why it improves the user experience
 
-This mode is valuable both for debugging and for demonstration. A user can immediately understand:
+This mode is valuable both for debugging and for demonstration. A user can immediately see:
 
-- which drone is moving,
-- where it is going,
-- whether a restricted transit is in progress,
-- whether a route is congested or blocked,
-- how the final state differs from the expected one.
+- which drones are landed versus mid-flight at any given turn,
+- how close each zone is to its declared capacity,
+- how many drones have reached the end hub so far,
+- how traffic spreads (or bottlenecks) across the available routes,
+- how the final state compares to the expected outcome.
 
 Because the map file can declare colors for zones, the visualization becomes intuitive and helps the reader track flows visually, even in complex maps.
 

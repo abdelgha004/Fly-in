@@ -3,6 +3,9 @@ name = "fly-in"
 version = "0.1.0"
 description = "Drone routing simulation for the Fly-in project"
 requires-python = ">=3.10"
+dependencies = [
+    "pygame>=2.5.0",
+]
 
 [dependency-groups]
 dev = [
@@ -20,3 +23,4 @@ warn_unused_ignores = true
 ignore_missing_imports = true
 disallow_untyped_defs = true
 check_untyped_defs = true
+exclude = ["\\.venv", "__pycache__", "\\.mypy_cache"]

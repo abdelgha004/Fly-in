@@ -19,26 +19,46 @@ class Simulation:
         self.scheduler = scheduler
         self.turn = 0
 
-    def run(self) -> list[list[str]]:
-        """Run the simulation until all drones reach the end."""
+    def run(
+        self,
+    ) -> tuple[list[list[str]], list[dict[int, str]]]:
+        """Run the simulation until all drones reach the end.
+
+        Returns:
+            (movements per turn, position snapshot per turn).
+        """
         self.scheduler.prepare_drones(self.drones)
 
         output: list[list[str]] = []
+        states: list[dict[int, str]] = [self._snapshot()]
 
         while not self._all_delivered():
             self.turn += 1
             movements = self._process_turn()
             if movements:
                 output.append(movements)
+            states.append(self._snapshot())
 
-        return output
+        return output, states
+
+    def _snapshot(self) -> dict[int, str]:
+        """Capture the current position of every drone."""
+        snap: dict[int, str] = {}
+        for drone in self.drones:
+            if drone.in_transit:
+                origin = drone.current_zone.name
+                dest = drone.transit_destination
+                dest_name = dest.name if dest is not None else "?"
+                snap[drone.drone_id] = f"{origin}-{dest_name}"
+            else:
+                snap[drone.drone_id] = drone.current_zone.name
+        return snap
 
     def _process_turn(self) -> list[str]:
         """Process one simulation turn."""
         movements: list[str] = []
         just_arrived: set[int] = set()
 
-        # Phase 1: complete restricted transits started last turn.
         for drone in self.drones:
             if drone.in_transit:
                 self._complete_transit(drone)
@@ -47,7 +67,6 @@ class Simulation:
                     f"D{drone.drone_id}-{drone.current_zone.name}"
                 )
 
-        # Phase 2: plan new moves.
         occupancy: dict[str, int] = {
             name: len(zone.drones)
             for name, zone in self.network.zones.items()
@@ -58,7 +77,9 @@ class Simulation:
         link_use: dict[str, int] = {}
 
         planned_normal: list[tuple[Drone, Zone, Zone]] = []
-        planned_restricted: list[tuple[Drone, Zone, Zone, Connection]] = []
+        planned_restricted: list[
+            tuple[Drone, Zone, Zone, Connection]
+        ] = []
 
         for drone in self.drones:
             if drone.is_finished() or drone.in_transit:
