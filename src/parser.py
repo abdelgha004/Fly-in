@@ -2,6 +2,7 @@
 
 import re
 from pathlib import Path
+from typing import Any
 
 from .models import Connection, Network, Zone
 
@@ -54,7 +55,7 @@ class MapParser:
             self._parse_zone(line, line_number, "normal")
             return
 
-        if "-" in line:
+        if line.startswith("connection:"):
             self._parse_connection(line, line_number)
             return
 
@@ -118,7 +119,7 @@ class MapParser:
             )
 
         metadata = self._parse_zone_metadata(
-            parts[3:],
+            self._extract_metadata(parts[3:], line_number),
             line_number,
         )
 
@@ -156,7 +157,20 @@ class MapParser:
         line_number: int,
     ) -> None:
         """Parse a connection between two zones."""
-        parts = line.split()
+        if not line.startswith("connection:"):
+            self._error(
+                line_number,
+                "connection must start with 'connection:'",
+            )
+
+        content = line[len("connection:"):].strip()
+        parts = content.split()
+
+        if not parts:
+            self._error(
+                line_number,
+                "connection is empty",
+            )
 
         connection_names = parts[0]
 
@@ -202,7 +216,7 @@ class MapParser:
             )
 
         metadata = self._parse_connection_metadata(
-            parts[1:],
+            self._extract_metadata(parts[1:], line_number),
             line_number,
         )
 
@@ -215,13 +229,37 @@ class MapParser:
 
         self.network.add_connection(connection)
 
+    def _extract_metadata(
+        self,
+        tokens: list[str],
+        line_number: int,
+    ) -> list[str]:
+        """Strip surrounding [ ] and return the metadata tokens."""
+        if not tokens:
+            return []
+
+        joined = " ".join(tokens)
+
+        if not joined.startswith("[") or not joined.endswith("]"):
+            self._error(
+                line_number,
+                "metadata must be enclosed in [ ]",
+            )
+
+        inner = joined[1:-1].strip()
+
+        if not inner:
+            return []
+
+        return inner.split()
+
     def _parse_zone_metadata(
         self,
         metadata: list[str],
         line_number: int,
-    ) -> dict[str, object]:
+    ) -> dict[str, Any]:
         """Parse optional zone metadata."""
-        values: dict[str, object] = {
+        values: dict[str, Any] = {
             "zone": "normal",
             "color": "white",
             "max_drones": 1,
@@ -290,9 +328,9 @@ class MapParser:
         self,
         metadata: list[str],
         line_number: int,
-    ) -> dict[str, int]:
+    ) -> dict[str, Any]:
         """Parse optional connection metadata."""
-        values = {
+        values: dict[str, Any] = {
             "max_link_capacity": 1,
         }
 

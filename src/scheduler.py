@@ -17,35 +17,28 @@ class Scheduler:
         self.pathfinder = pathfinder
 
     def prepare_drones(self, drones: list[Drone]) -> None:
-        """Calculate a path for every drone."""
-        if self.network.start_zone is None:
-            raise ValueError("network has no start zone")
+        """Assign different paths to different drones."""
+        start = self.network.start_zone
+        end = self.network.end_zone
+        if start is None or end is None:
+            raise ValueError("network missing start or end zone")
 
-        if self.network.end_zone is None:
-            raise ValueError("network has no end zone")
+        k = max(1, min(4, len(drones)))
+        paths = self.pathfinder.find_k_paths(start, end, k=k)
 
-        for drone in drones:
-            path = self.pathfinder.find_path(
-                self.network.start_zone,
-                self.network.end_zone,
-            )
+        if not paths:
+            raise ValueError("no path found from start to end")
 
-            if not path:
-                raise ValueError(
-                    f"no path found for drone {drone.drone_id}"
-                )
-
-            drone.path = path
+        for index, drone in enumerate(drones):
+            drone.path = paths[index % len(paths)]
             drone.path_index = 0
 
     def get_next_zone(self, drone: Drone) -> Zone | None:
         """Return the next zone on a drone's path."""
         if drone.is_finished():
             return None
-
         if drone.path_index + 1 >= len(drone.path):
             return None
-
         return drone.path[drone.path_index + 1]
 
     def can_move(
@@ -62,10 +55,8 @@ class Scheduler:
             return False
 
         connection = self.pathfinder.graph.get_connection(
-            current_zone,
-            next_zone,
+            current_zone, next_zone
         )
-
         if connection is None:
             return False
 
@@ -83,15 +74,10 @@ class Scheduler:
             return None
 
         next_zone = self.get_next_zone(drone)
-
         if next_zone is None:
             return None
 
-        if not self.can_move(
-            drone,
-            drone.current_zone,
-            next_zone,
-        ):
+        if not self.can_move(drone, drone.current_zone, next_zone):
             return None
 
         return drone.current_zone, next_zone

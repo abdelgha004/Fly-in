@@ -1,42 +1,46 @@
-===== Makefile =====
 NAME = fly-in
 
 PYTHON = uv run python
+FILE ?= maps/easy/01_linear_path.txt
 
 install:
 	uv sync
 
 run:
-	$(PYTHON) -m src
+	$(PYTHON) -m src $(FILE)
 
 debug:
-	$(PYTHON) -m pdb -m src
+	$(PYTHON) -m pdb src/__main__.py $(FILE)
+
+visual:
+	$(PYTHON) -m src $(FILE) --visual
 
 clean:
-	find . -type d -name "__pycache__" -exec rm -rf {} +
-	find . -type d -name ".mypy_cache" -exec rm -rf {} +
-	find . -type d -name ".pytest_cache" -exec rm -rf {} +
+	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name ".mypy_cache" -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
 
 lint:
-	uv run flake8 .
-	uv run mypy . --warn-return-any \
+	uv run flake8 . --exclude=.venv,__pycache__,.mypy_cache
+	uv run mypy . --exclude '\.venv' \
+		--warn-return-any \
 		--warn-unused-ignores \
 		--ignore-missing-imports \
 		--disallow-untyped-defs \
 		--check-untyped-defs
 
-.PHONY: install run debug clean lint
-===== src/__init__.py =====
+lint-strict:
+	uv run flake8 . --exclude=.venv,__pycache__,.mypy_cache
+	uv run mypy . --exclude '\.venv' --strict
 
-===== src/__main__.py =====
-"""Entry point for the Fly-in application."""
+.PHONY: install run debug visual clean lint lint-strict"""Entry point for the Fly-in application."""
 
 import sys
 
 from .graph import Graph
+from .models import Drone, Zone
 from .parser import MapParser
 from .pathfinding import PathFinder
-from .models import Drone
 from .scheduler import Scheduler
 from .simulation import Simulation
 from .visualization import Visualizer
@@ -44,45 +48,38 @@ from .visualization import Visualizer
 
 def main() -> None:
     """Run the Fly-in application."""
-    if len(sys.argv) != 2:
-        print("Usage: python -m src <map_file>")
+    args = [a for a in sys.argv[1:] if a != "--visual"]
+    visual = "--visual" in sys.argv
+
+    if len(args) != 1:
+        print("Usage: python -m src <map_file> [--visual]")
         return
 
-    filename = sys.argv[1]
+    filename = args[0]
 
     try:
         parser = MapParser()
         network = parser.parse(filename)
 
-        if network.start_zone is None:
+        start_zone = network.start_zone
+        if start_zone is None:
             raise ValueError("missing start zone")
 
         graph = Graph(network)
         pathfinder = PathFinder(graph)
         scheduler = Scheduler(network, pathfinder)
 
-        drones = _create_drones(
-            parser.nb_drones,
-            network.start_zone,
-        )
+        drones = _create_drones(parser.nb_drones, start_zone)
 
-        simulation = Simulation(
-            network,
-            drones,
-            scheduler,
-        )
-
+        simulation = Simulation(network, drones, scheduler)
         visualizer = Visualizer(network)
 
         results = simulation.run()
 
-        for turn, movements in enumerate(results, start=1):
-            visualizer.display_turn(
-                turn,
-                movements,
-            )
-
-        visualizer.display_drones(drones)
+        if visual:
+            visualizer.emit_visual_output(results, drones)
+        else:
+            visualizer.emit_required_output(results)
 
     except (OSError, ValueError) as error:
         print(f"Error: {error}")
@@ -90,16 +87,13 @@ def main() -> None:
 
 def _create_drones(
     number_of_drones: int,
-    start_zone: object,
+    start_zone: Zone,
 ) -> list[Drone]:
     """Create all drones at the start zone."""
     drones: list[Drone] = []
 
     for drone_id in range(1, number_of_drones + 1):
-        drone = Drone(
-            drone_id=drone_id,
-            current_zone=start_zone,
-        )
+        drone = Drone(drone_id=drone_id, current_zone=start_zone)
         start_zone.add_drone(drone)
         drones.append(drone)
 
@@ -108,8 +102,6 @@ def _create_drones(
 
 if __name__ == "__main__":
     main()
-
-===== src/graph.py =====
 """Graph operations for the Fly-in drone routing system."""
 
 from .models import Connection, Network, Zone
@@ -182,8 +174,6 @@ class Graph:
         )
 
         return direct or reverse
-
-===== src/models.py =====
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -204,23 +194,21 @@ class Zone:
     is_end: bool = False
     drones: List[int] = field(default_factory=list)
 
-    def can_enter(self, drone: Optional[Union[int, Drone]] = None) -> bool:
+    def can_enter(self, drone: Optional[Union[int, "Drone"]] = None) -> bool:
         """Check whether another drone can enter the zone."""
         if self.is_start or self.is_end:
             return True
         return len(self.drones) < self.max_drones
 
-    def add_drone(self, drone: Union[int, Drone]) -> None:
+    def add_drone(self, drone: Union[int, "Drone"]) -> None:
         """Add a drone to this zone."""
         drone_id = drone if isinstance(drone, int) else drone.drone_id
-
         if drone_id not in self.drones:
             self.drones.append(drone_id)
 
-    def remove_drone(self, drone: Union[int, Drone]) -> None:
+    def remove_drone(self, drone: Union[int, "Drone"]) -> None:
         """Remove a drone from this zone."""
         drone_id = drone if isinstance(drone, int) else drone.drone_id
-
         if drone_id in self.drones:
             self.drones.remove(drone_id)
 
@@ -245,32 +233,28 @@ class Connection:
         """Return the zone on the other side of the connection."""
         if zone == self.zone_a:
             return self.zone_b
-
         if zone == self.zone_b:
             return self.zone_a
-
         raise ValueError(
             f"Zone '{zone.name}' is not connected to '{self.name}'"
         )
 
     def can_enter(
         self,
-        drone: Optional[Union[int, Drone]] = None,
+        drone: Optional[Union[int, "Drone"]] = None,
     ) -> bool:
         """Check whether another drone can use this connection."""
         return len(self.drones) < self.max_link_capacity
 
-    def add_drone(self, drone: Union[int, Drone]) -> None:
+    def add_drone(self, drone: Union[int, "Drone"]) -> None:
         """Add a drone to the connection."""
         drone_id = drone if isinstance(drone, int) else drone.drone_id
-
         if drone_id not in self.drones:
             self.drones.append(drone_id)
 
-    def remove_drone(self, drone: Union[int, Drone]) -> None:
+    def remove_drone(self, drone: Union[int, "Drone"]) -> None:
         """Remove a drone from the connection."""
         drone_id = drone if isinstance(drone, int) else drone.drone_id
-
         if drone_id in self.drones:
             self.drones.remove(drone_id)
 
@@ -285,14 +269,14 @@ class Drone:
     path_index: int = 0
     delivered: bool = False
     waiting: bool = False
-    remaining_turns: int = 0
-    current_connection: Optional[Connection] = None
+    in_transit: bool = False
+    transit_connection: Optional[Connection] = None
+    transit_destination: Optional[Zone] = None
 
     def next_zone(self) -> Optional[Zone]:
         """Return the next zone in the drone's path."""
         if self.path_index + 1 >= len(self.path):
             return None
-
         return self.path[self.path_index + 1]
 
     def move_to(self, zone: Zone) -> None:
@@ -302,8 +286,10 @@ class Drone:
         self.waiting = False
 
     def is_finished(self) -> bool:
-        """Check whether the drone has reached the end zone."""
-        return self.delivered
+        """Check whether the drone has reached the end of its path."""
+        if not self.path:
+            return False
+        return self.path_index >= len(self.path) - 1
 
 
 @dataclass
@@ -320,20 +306,16 @@ class Network:
         """Add a zone to the network."""
         self.zones[zone.name] = zone
         self.adjacency.setdefault(zone.name, [])
-
         if zone.is_start:
             self.start_zone = zone
-
         if zone.is_end:
             self.end_zone = zone
 
     def add_connection(self, connection: Connection) -> None:
         """Add a connection to the network."""
         self.connections[connection.name] = connection
-
         self.adjacency.setdefault(connection.zone_a.name, [])
         self.adjacency.setdefault(connection.zone_b.name, [])
-
         self.adjacency[connection.zone_a.name].append(
             connection.zone_b.name
         )
@@ -360,13 +342,11 @@ class Network:
                 and connection.zone_b == zone_a
             ):
                 return connection
-
         return None
 
     def neighbors(self, zone: Zone) -> List[Zone]:
         """Return all zones connected to the given zone."""
         neighbor_names = self.adjacency.get(zone.name, [])
-
         return [
             self.zones[neighbor_name]
             for neighbor_name in neighbor_names
@@ -384,15 +364,14 @@ class SimulationState:
     def all_delivered(self) -> bool:
         """Check whether all drones reached the destination."""
         return all(
-            drone.delivered
+            drone.is_finished()
             for drone in self.drones.values()
         )
-
-===== src/parser.py =====
 """Parser for Fly-in map files."""
 
 import re
 from pathlib import Path
+from typing import Any
 
 from .models import Connection, Network, Zone
 
@@ -445,7 +424,7 @@ class MapParser:
             self._parse_zone(line, line_number, "normal")
             return
 
-        if "-" in line:
+        if line.startswith("connection:"):
             self._parse_connection(line, line_number)
             return
 
@@ -509,7 +488,7 @@ class MapParser:
             )
 
         metadata = self._parse_zone_metadata(
-            parts[3:],
+            self._extract_metadata(parts[3:], line_number),
             line_number,
         )
 
@@ -547,7 +526,20 @@ class MapParser:
         line_number: int,
     ) -> None:
         """Parse a connection between two zones."""
-        parts = line.split()
+        if not line.startswith("connection:"):
+            self._error(
+                line_number,
+                "connection must start with 'connection:'",
+            )
+
+        content = line[len("connection:"):].strip()
+        parts = content.split()
+
+        if not parts:
+            self._error(
+                line_number,
+                "connection is empty",
+            )
 
         connection_names = parts[0]
 
@@ -593,7 +585,7 @@ class MapParser:
             )
 
         metadata = self._parse_connection_metadata(
-            parts[1:],
+            self._extract_metadata(parts[1:], line_number),
             line_number,
         )
 
@@ -606,13 +598,37 @@ class MapParser:
 
         self.network.add_connection(connection)
 
+    def _extract_metadata(
+        self,
+        tokens: list[str],
+        line_number: int,
+    ) -> list[str]:
+        """Strip surrounding [ ] and return the metadata tokens."""
+        if not tokens:
+            return []
+
+        joined = " ".join(tokens)
+
+        if not joined.startswith("[") or not joined.endswith("]"):
+            self._error(
+                line_number,
+                "metadata must be enclosed in [ ]",
+            )
+
+        inner = joined[1:-1].strip()
+
+        if not inner:
+            return []
+
+        return inner.split()
+
     def _parse_zone_metadata(
         self,
         metadata: list[str],
         line_number: int,
-    ) -> dict[str, object]:
+    ) -> dict[str, Any]:
         """Parse optional zone metadata."""
-        values: dict[str, object] = {
+        values: dict[str, Any] = {
             "zone": "normal",
             "color": "white",
             "max_drones": 1,
@@ -681,9 +697,9 @@ class MapParser:
         self,
         metadata: list[str],
         line_number: int,
-    ) -> dict[str, int]:
+    ) -> dict[str, Any]:
         """Parse optional connection metadata."""
-        values = {
+        values: dict[str, Any] = {
             "max_link_capacity": 1,
         }
 
@@ -816,8 +832,6 @@ class MapParser:
         raise ValueError(
             f"line {line_number}: {message}"
         )
-
-===== src/pathfinding.py =====
 """Pathfinding algorithms for the Fly-in drone routing system."""
 
 import heapq
@@ -833,6 +847,71 @@ class PathFinder:
         """Initialize the pathfinder."""
         self.graph = graph
 
+    def find_k_paths(
+        self,
+        start: Zone,
+        end: Zone,
+        k: int = 4,
+    ) -> list[list[Zone]]:
+        """Find up to k lowest-cost simple paths."""
+        if k <= 0:
+            return []
+
+        paths: list[list[Zone]] = []
+        heap: list[tuple[int, int, int, tuple[str, ...]]] = []
+        counter = 0
+
+        heapq.heappush(
+            heap,
+            (0, 0, counter, (start.name,)),
+        )
+
+        best_cost: int | None = None
+        cost_margin = 1
+
+        while heap and len(paths) < k:
+            cost, _, _, path_names = heapq.heappop(heap)
+
+            if best_cost is not None and cost > best_cost + cost_margin:
+                break
+
+            last_name = path_names[-1]
+
+            if last_name == end.name:
+                if best_cost is None:
+                    best_cost = cost
+                paths.append(
+                    [self.graph.network.get_zone(n) for n in path_names]
+                )
+                continue
+
+            current_zone = self.graph.network.get_zone(last_name)
+
+            for neighbor in self.graph.get_neighbors(current_zone):
+                if not self.graph.can_enter(neighbor):
+                    continue
+                if neighbor.name in path_names:
+                    continue
+
+                new_cost = cost + self.graph.get_cost(neighbor)
+                counter += 1
+                heapq.heappush(
+                    heap,
+                    (
+                        new_cost,
+                        0,
+                        counter,
+                        path_names + (neighbor.name,),
+                    ),
+                )
+
+        if not paths:
+            single = self.find_path(start, end)
+            if single:
+                paths.append(single)
+
+        return paths
+
     def find_path(
         self,
         start: Zone,
@@ -845,10 +924,7 @@ class PathFinder:
         queue: list[tuple[int, int, str]] = []
         counter = 0
 
-        heapq.heappush(
-            queue,
-            (0, counter, start.name),
-        )
+        heapq.heappush(queue, (0, counter, start.name))
 
         while queue:
             current_cost, _, current_name = heapq.heappop(queue)
@@ -856,7 +932,7 @@ class PathFinder:
             if current_name == end.name:
                 return self._build_path(previous, end)
 
-            if current_cost > distances.get(current_name, float("inf")):
+            if current_cost > distances.get(current_name, 10**18):
                 continue
 
             current_zone = self.graph.network.get_zone(current_name)
@@ -867,15 +943,10 @@ class PathFinder:
 
                 new_cost = current_cost + self.graph.get_cost(neighbor)
 
-                if self._is_better_path(
-                    neighbor,
-                    new_cost,
-                    distances,
-                ):
+                if self._is_better_path(neighbor, new_cost, distances):
                     distances[neighbor.name] = new_cost
                     previous[neighbor.name] = current_zone
                     counter += 1
-
                     heapq.heappush(
                         queue,
                         (new_cost, counter, neighbor.name),
@@ -891,16 +962,12 @@ class PathFinder:
     ) -> bool:
         """Check whether a new path is better."""
         old_cost = distances.get(zone.name)
-
         if old_cost is None:
             return True
-
         if new_cost < old_cost:
             return True
-
         if new_cost == old_cost and zone.zone_type == "priority":
             return True
-
         return False
 
     def _build_path(
@@ -911,15 +978,11 @@ class PathFinder:
         """Build the path from the previous-zone information."""
         path: list[Zone] = []
         current: Zone | None = end
-
         while current is not None:
             path.append(current)
             current = previous.get(current.name)
-
         path.reverse()
         return path
-
-===== src/scheduler.py =====
 """Drone scheduling for the Fly-in simulation."""
 
 from .models import Drone, Network, Zone
@@ -939,35 +1002,28 @@ class Scheduler:
         self.pathfinder = pathfinder
 
     def prepare_drones(self, drones: list[Drone]) -> None:
-        """Calculate a path for every drone."""
-        if self.network.start_zone is None:
-            raise ValueError("network has no start zone")
+        """Assign different paths to different drones."""
+        start = self.network.start_zone
+        end = self.network.end_zone
+        if start is None or end is None:
+            raise ValueError("network missing start or end zone")
 
-        if self.network.end_zone is None:
-            raise ValueError("network has no end zone")
+        k = max(1, min(4, len(drones)))
+        paths = self.pathfinder.find_k_paths(start, end, k=k)
 
-        for drone in drones:
-            path = self.pathfinder.find_path(
-                self.network.start_zone,
-                self.network.end_zone,
-            )
+        if not paths:
+            raise ValueError("no path found from start to end")
 
-            if not path:
-                raise ValueError(
-                    f"no path found for drone {drone.drone_id}"
-                )
-
-            drone.path = path
+        for index, drone in enumerate(drones):
+            drone.path = paths[index % len(paths)]
             drone.path_index = 0
 
     def get_next_zone(self, drone: Drone) -> Zone | None:
         """Return the next zone on a drone's path."""
         if drone.is_finished():
             return None
-
         if drone.path_index + 1 >= len(drone.path):
             return None
-
         return drone.path[drone.path_index + 1]
 
     def can_move(
@@ -984,10 +1040,8 @@ class Scheduler:
             return False
 
         connection = self.pathfinder.graph.get_connection(
-            current_zone,
-            next_zone,
+            current_zone, next_zone
         )
-
         if connection is None:
             return False
 
@@ -1005,23 +1059,16 @@ class Scheduler:
             return None
 
         next_zone = self.get_next_zone(drone)
-
         if next_zone is None:
             return None
 
-        if not self.can_move(
-            drone,
-            drone.current_zone,
-            next_zone,
-        ):
+        if not self.can_move(drone, drone.current_zone, next_zone):
             return None
 
         return drone.current_zone, next_zone
-
-===== src/simulation.py =====
 """Simulation engine for the Fly-in drone routing system."""
 
-from .models import Drone, Network
+from .models import Connection, Drone, Network, Zone
 from .scheduler import Scheduler
 
 
@@ -1048,9 +1095,7 @@ class Simulation:
 
         while not self._all_delivered():
             self.turn += 1
-
             movements = self._process_turn()
-
             if movements:
                 output.append(movements)
 
@@ -1059,112 +1104,117 @@ class Simulation:
     def _process_turn(self) -> list[str]:
         """Process one simulation turn."""
         movements: list[str] = []
-        planned: list[tuple[Drone, object, object]] = []
+        just_arrived: set[int] = set()
+
+        # Phase 1: complete restricted transits started last turn.
+        for drone in self.drones:
+            if drone.in_transit:
+                self._complete_transit(drone)
+                just_arrived.add(drone.drone_id)
+                movements.append(
+                    f"D{drone.drone_id}-{drone.current_zone.name}"
+                )
+
+        # Phase 2: plan new moves.
+        occupancy: dict[str, int] = {
+            name: len(zone.drones)
+            for name, zone in self.network.zones.items()
+        }
+        reserved: dict[str, int] = {}
+        leaving: dict[str, int] = {}
+        arriving: dict[str, int] = {}
+        link_use: dict[str, int] = {}
+
+        planned_normal: list[tuple[Drone, Zone, Zone]] = []
+        planned_restricted: list[tuple[Drone, Zone, Zone, Connection]] = []
 
         for drone in self.drones:
-            if drone.is_finished():
+            if drone.is_finished() or drone.in_transit:
+                continue
+            if drone.drone_id in just_arrived:
                 continue
 
-            move = self.scheduler.choose_move(drone)
-
-            if move is None:
+            current = drone.current_zone
+            nxt = self.scheduler.get_next_zone(drone)
+            if nxt is None:
                 continue
 
-            current_zone, next_zone = move
+            conn = self.network.get_connection(current, nxt)
+            if conn is None:
+                continue
 
-            if self._already_planned_for_zone(
-                planned,
-                next_zone,
+            if (
+                len(conn.drones) + link_use.get(conn.name, 0)
+                >= conn.max_link_capacity
             ):
                 continue
 
-            planned.append(
-                (
-                    drone,
-                    current_zone,
-                    next_zone,
+            if not nxt.is_start and not nxt.is_end:
+                projected = (
+                    occupancy.get(nxt.name, 0)
+                    - leaving.get(nxt.name, 0)
+                    + arriving.get(nxt.name, 0)
+                    + reserved.get(nxt.name, 0)
                 )
-            )
+                if projected >= nxt.max_drones:
+                    continue
 
-        for drone, current_zone, next_zone in planned:
-            if not self._can_execute_move(
-                drone,
-                current_zone,
-                next_zone,
-            ):
-                continue
+            leaving[current.name] = leaving.get(current.name, 0) + 1
+            link_use[conn.name] = link_use.get(conn.name, 0) + 1
 
-            self._move_drone(
-                drone,
-                current_zone,
-                next_zone,
-            )
+            if nxt.zone_type == "restricted":
+                planned_restricted.append((drone, current, nxt, conn))
+                reserved[nxt.name] = reserved.get(nxt.name, 0) + 1
+            else:
+                planned_normal.append((drone, current, nxt))
+                arriving[nxt.name] = arriving.get(nxt.name, 0) + 1
 
+        for drone, current, nxt in planned_normal:
+            current.remove_drone(drone)
+            nxt.add_drone(drone)
+            drone.move_to(nxt)
+            if self.network.end_zone is not None:
+                if nxt == self.network.end_zone:
+                    drone.delivered = True
+            movements.append(f"D{drone.drone_id}-{nxt.name}")
+
+        for drone, current, nxt, conn in planned_restricted:
+            current.remove_drone(drone)
+            conn.add_drone(drone)
+            drone.in_transit = True
+            drone.transit_connection = conn
+            drone.transit_destination = nxt
             movements.append(
-                f"D{drone.drone_id}-{next_zone.name}"
+                f"D{drone.drone_id}-{current.name}-{nxt.name}"
             )
 
         return movements
 
-    def _can_execute_move(
-        self,
-        drone: Drone,
-        current_zone: object,
-        next_zone: object,
-    ) -> bool:
-        """Check whether a planned movement can be executed."""
-        if not next_zone.can_enter(drone):
-            return False
+    def _complete_transit(self, drone: Drone) -> None:
+        """Finish a restricted transit — drone arrives at destination."""
+        conn = drone.transit_connection
+        nxt = drone.transit_destination
+        if conn is None or nxt is None:
+            raise ValueError("invalid transit state")
 
-        connection = self.scheduler.pathfinder.graph.get_connection(
-            current_zone,
-            next_zone,
-        )
+        conn.remove_drone(drone)
+        nxt.add_drone(drone)
+        drone.current_zone = nxt
+        drone.path_index += 1
+        drone.in_transit = False
+        drone.transit_connection = None
+        drone.transit_destination = None
 
-        if connection is None:
-            return False
-
-        if not connection.can_enter(drone):
-            return False
-
-        return True
-
-    def _move_drone(
-        self,
-        drone: Drone,
-        current_zone: object,
-        next_zone: object,
-    ) -> None:
-        """Move a drone from one zone to another."""
-        current_zone.remove_drone(drone)
-        next_zone.add_drone(drone)
-
-        drone.move_to(next_zone)
-
-        if drone.is_finished():
-            drone.delivered = True
-
-    def _already_planned_for_zone(
-        self,
-        planned: list[tuple[Drone, object, object]],
-        next_zone: object,
-    ) -> bool:
-        """Check whether another drone targets the same zone."""
-        for _, _, target_zone in planned:
-            if target_zone == next_zone:
-                return True
-
-        return False
+        if self.network.end_zone is not None:
+            if nxt == self.network.end_zone:
+                drone.delivered = True
 
     def _all_delivered(self) -> bool:
         """Check whether every drone reached the end."""
         for drone in self.drones:
             if not drone.is_finished():
                 return False
-
         return True
-
-===== src/visualization.py =====
 """Terminal visualization for the Fly-in simulation."""
 
 from .models import Drone, Network
@@ -1174,67 +1224,71 @@ class Visualizer:
     """Display the drone simulation in the terminal."""
 
     RESET = "\033[0m"
+    BOLD = "\033[1m"
 
     def __init__(self, network: Network) -> None:
         """Initialize the visualizer."""
         self.network = network
 
-    def display_turn(
+    def emit_required_output(
         self,
-        turn: int,
-        movements: list[str],
+        results: list[list[str]],
     ) -> None:
-        """Display the movements made during one turn."""
-        print(f"\nTurn {turn}:")
+        """Print simulation in the exact format required by the subject."""
+        for movements in results:
+            print(" ".join(movements))
 
-        if not movements:
-            print("  No movement")
-            return
-
-        for movement in movements:
-            print(f"  {self._colorize_movement(movement)}")
-
-    def display_drones(
+    def emit_visual_output(
         self,
+        results: list[list[str]],
         drones: list[Drone],
     ) -> None:
-        """Display the final position of all drones."""
-        print("\nFinal positions:")
+        """Print a colored turn-by-turn visualization."""
+        for turn, movements in enumerate(results, start=1):
+            print(f"\n{self.BOLD}Turn {turn}:{self.RESET}")
+            if not movements:
+                print("  (no movement)")
+            else:
+                for movement in movements:
+                    print(f"  {self._colorize_movement(movement)}")
 
+        print(f"\n{self.BOLD}Final positions:{self.RESET}")
         for drone in drones:
-            if drone.current_zone is None:
-                continue
-
-            zone_name = drone.current_zone.name
-            color = drone.current_zone.color
-
+            zone = drone.current_zone
             print(
                 f"  D{drone.drone_id} -> "
-                f"{self._colorize(zone_name, color)}"
+                f"{self._colorize(zone.name, zone.color)}"
             )
 
     def _colorize_movement(self, movement: str) -> str:
-        """Color a movement according to its destination zone."""
-        parts = movement.split("-", 1)
+        """Color a movement string according to its destination zone."""
+        parts = movement.split("-")
 
-        if len(parts) != 2:
-            return movement
+        if len(parts) == 2:
+            drone_id, zone_name = parts
+            zone = self.network.zones.get(zone_name)
+            if zone is None:
+                return movement
+            return (
+                f"{drone_id}-"
+                f"{self._colorize(zone_name, zone.color)}"
+            )
 
-        zone_name = parts[1]
-        zone = self.network.zones.get(zone_name)
+        if len(parts) == 3:
+            drone_id, origin_name, dest_name = parts
+            dest = self.network.zones.get(dest_name)
+            color = dest.color if dest is not None else None
+            return (
+                f"{drone_id}-{origin_name}-"
+                f"{self._colorize(dest_name, color)}"
+            )
 
-        if zone is None:
-            return movement
-
-        return (
-            f"D{parts[0][1:]}-"
-            f"{self._colorize(zone_name, zone.color)}"
-        )
+        return movement
 
     def _colorize(
         self,
         text: str,
-        color_name: str,
+        color_name: str | None,
     ) -> str:
         """Return text with an ANSI terminal color."""
         color_codes = {
@@ -1246,12 +1300,17 @@ class Visualizer:
             "magenta": "\033[35m",
             "cyan": "\033[36m",
             "white": "\033[37m",
+            "gray": "\033[90m",
+            "grey": "\033[90m",
+            "orange": "\033[38;5;208m",
+            "purple": "\033[38;5;93m",
+            "gold": "\033[38;5;220m",
+            "crimson": "\033[38;5;161m",
+            "maroon": "\033[38;5;88m",
         }
 
-        code = color_codes.get(
-            color_name.lower(),
-            "\033[37m",
-        )
+        if color_name is None:
+            return text
 
+        code = color_codes.get(color_name.lower(), "\033[37m")
         return f"{code}{text}{self.RESET}"
-

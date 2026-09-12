@@ -1,6 +1,6 @@
 """Simulation engine for the Fly-in drone routing system."""
 
-from .models import Drone, Network
+from .models import Connection, Drone, Network, Zone
 from .scheduler import Scheduler
 
 
@@ -27,9 +27,7 @@ class Simulation:
 
         while not self._all_delivered():
             self.turn += 1
-
             movements = self._process_turn()
-
             if movements:
                 output.append(movements)
 
@@ -38,107 +36,114 @@ class Simulation:
     def _process_turn(self) -> list[str]:
         """Process one simulation turn."""
         movements: list[str] = []
-        planned: list[tuple[Drone, object, object]] = []
+        just_arrived: set[int] = set()
+
+        # Phase 1: complete restricted transits started last turn.
+        for drone in self.drones:
+            if drone.in_transit:
+                self._complete_transit(drone)
+                just_arrived.add(drone.drone_id)
+                movements.append(
+                    f"D{drone.drone_id}-{drone.current_zone.name}"
+                )
+
+        # Phase 2: plan new moves.
+        occupancy: dict[str, int] = {
+            name: len(zone.drones)
+            for name, zone in self.network.zones.items()
+        }
+        reserved: dict[str, int] = {}
+        leaving: dict[str, int] = {}
+        arriving: dict[str, int] = {}
+        link_use: dict[str, int] = {}
+
+        planned_normal: list[tuple[Drone, Zone, Zone]] = []
+        planned_restricted: list[tuple[Drone, Zone, Zone, Connection]] = []
 
         for drone in self.drones:
-            if drone.is_finished():
+            if drone.is_finished() or drone.in_transit:
+                continue
+            if drone.drone_id in just_arrived:
                 continue
 
-            move = self.scheduler.choose_move(drone)
-
-            if move is None:
+            current = drone.current_zone
+            nxt = self.scheduler.get_next_zone(drone)
+            if nxt is None:
                 continue
 
-            current_zone, next_zone = move
+            conn = self.network.get_connection(current, nxt)
+            if conn is None:
+                continue
 
-            if self._already_planned_for_zone(
-                planned,
-                next_zone,
+            if (
+                len(conn.drones) + link_use.get(conn.name, 0)
+                >= conn.max_link_capacity
             ):
                 continue
 
-            planned.append(
-                (
-                    drone,
-                    current_zone,
-                    next_zone,
+            if not nxt.is_start and not nxt.is_end:
+                projected = (
+                    occupancy.get(nxt.name, 0)
+                    - leaving.get(nxt.name, 0)
+                    + arriving.get(nxt.name, 0)
+                    + reserved.get(nxt.name, 0)
                 )
-            )
+                if projected >= nxt.max_drones:
+                    continue
 
-        for drone, current_zone, next_zone in planned:
-            if not self._can_execute_move(
-                drone,
-                current_zone,
-                next_zone,
-            ):
-                continue
+            leaving[current.name] = leaving.get(current.name, 0) + 1
+            link_use[conn.name] = link_use.get(conn.name, 0) + 1
 
-            self._move_drone(
-                drone,
-                current_zone,
-                next_zone,
-            )
+            if nxt.zone_type == "restricted":
+                planned_restricted.append((drone, current, nxt, conn))
+                reserved[nxt.name] = reserved.get(nxt.name, 0) + 1
+            else:
+                planned_normal.append((drone, current, nxt))
+                arriving[nxt.name] = arriving.get(nxt.name, 0) + 1
 
+        for drone, current, nxt in planned_normal:
+            current.remove_drone(drone)
+            nxt.add_drone(drone)
+            drone.move_to(nxt)
+            if self.network.end_zone is not None:
+                if nxt == self.network.end_zone:
+                    drone.delivered = True
+            movements.append(f"D{drone.drone_id}-{nxt.name}")
+
+        for drone, current, nxt, conn in planned_restricted:
+            current.remove_drone(drone)
+            conn.add_drone(drone)
+            drone.in_transit = True
+            drone.transit_connection = conn
+            drone.transit_destination = nxt
             movements.append(
-                f"D{drone.drone_id}-{next_zone.name}"
+                f"D{drone.drone_id}-{current.name}-{nxt.name}"
             )
 
         return movements
 
-    def _can_execute_move(
-        self,
-        drone: Drone,
-        current_zone: object,
-        next_zone: object,
-    ) -> bool:
-        """Check whether a planned movement can be executed."""
-        if not next_zone.can_enter(drone):
-            return False
+    def _complete_transit(self, drone: Drone) -> None:
+        """Finish a restricted transit — drone arrives at destination."""
+        conn = drone.transit_connection
+        nxt = drone.transit_destination
+        if conn is None or nxt is None:
+            raise ValueError("invalid transit state")
 
-        connection = self.scheduler.pathfinder.graph.get_connection(
-            current_zone,
-            next_zone,
-        )
+        conn.remove_drone(drone)
+        nxt.add_drone(drone)
+        drone.current_zone = nxt
+        drone.path_index += 1
+        drone.in_transit = False
+        drone.transit_connection = None
+        drone.transit_destination = None
 
-        if connection is None:
-            return False
-
-        if not connection.can_enter(drone):
-            return False
-
-        return True
-
-    def _move_drone(
-        self,
-        drone: Drone,
-        current_zone: object,
-        next_zone: object,
-    ) -> None:
-        """Move a drone from one zone to another."""
-        current_zone.remove_drone(drone)
-        next_zone.add_drone(drone)
-
-        drone.move_to(next_zone)
-
-        if drone.is_finished():
-            drone.delivered = True
-
-    def _already_planned_for_zone(
-        self,
-        planned: list[tuple[Drone, object, object]],
-        next_zone: object,
-    ) -> bool:
-        """Check whether another drone targets the same zone."""
-        for _, _, target_zone in planned:
-            if target_zone == next_zone:
-                return True
-
-        return False
+        if self.network.end_zone is not None:
+            if nxt == self.network.end_zone:
+                drone.delivered = True
 
     def _all_delivered(self) -> bool:
         """Check whether every drone reached the end."""
         for drone in self.drones:
             if not drone.is_finished():
                 return False
-
         return True

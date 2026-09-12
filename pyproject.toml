@@ -1,0 +1,22 @@
+[project]
+name = "fly-in"
+version = "0.1.0"
+description = "Drone routing simulation for the Fly-in project"
+requires-python = ">=3.10"
+
+[dependency-groups]
+dev = [
+    "flake8>=7.0.0",
+    "mypy>=1.10.0",
+]
+
+[tool.flake8]
+max-line-length = 79
+exclude = [".venv", "__pycache__", ".mypy_cache"]
+
+[tool.mypy]
+warn_return_any = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+disallow_untyped_defs = true
+check_untyped_defs = true
