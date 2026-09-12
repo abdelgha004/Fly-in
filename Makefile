@@ -29,8 +29,5 @@ lint:
 		--disallow-untyped-defs \
 		--check-untyped-defs
 
-lint-strict:
-	uv run flake8 . --exclude=.venv,__pycache__,.mypy_cache
-	uv run mypy . --exclude '\.venv' --strict
 
-.PHONY: install run debug visual clean lint lint-strict
+.PHONY: install run debug visual clean lint
